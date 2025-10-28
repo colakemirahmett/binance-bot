@@ -1,22 +1,23 @@
-import requests,hmac,hashlib
+import requests, hmac, hashlib
 import pandas as pd
-import talib
+import pandas_ta as ta   # ← Değişiklik burada
 import time
 from datetime import datetime
 from urllib.parse import urlencode
 import os
+
 BASE = "https://fapi.binance.com"
 api_key = os.getenv("API_KEY")
 secret_key = os.getenv("SECRET_KEY")
 limit = 250
 
-# ✅ EK 1: 24 saatlik short sinyal takibi
+# ✅ 24 saatlik short sinyal takibi
 short_signal_ts = {}
 SIGNAL_TTL = 86400  # 24 saat (saniye)
 
-def request_signature(yon,endpoint,params):
+def request_signature(yon, endpoint, params):
     params["timestamp"] = int(time.time() * 1000)
-    query_string=urlencode(params)
+    query_string = urlencode(params)
     signature = hmac.new(secret_key.encode(), query_string.encode(), hashlib.sha256).hexdigest()
     query_string += f"&signature={signature}"
     headers = {"X-MBX-APIKEY": api_key}
@@ -24,10 +25,10 @@ def request_signature(yon,endpoint,params):
     r = requests.request(yon, url, headers=headers)
     return r.json()
 
-def short_position(symbol,entry_price,lavarege=10,stop_loss=0.02,take_profit=0.04):
-    request_signature("POST","/fapi/v1/leverage",{
-        "symbol":symbol,
-        "leverage":lavarege
+def short_position(symbol, entry_price, lavarege=10, stop_loss=0.02, take_profit=0.04):
+    request_signature("POST", "/fapi/v1/leverage", {
+        "symbol": symbol,
+        "leverage": lavarege
     })
 
     headers = {"X-MBX-APIKEY": api_key}
@@ -68,16 +69,13 @@ def short_position(symbol,entry_price,lavarege=10,stop_loss=0.02,take_profit=0.0
     while True:
         pozition = request_signature("GET", "/fapi/v2/positionRisk", {"symbol": symbol})
         poz_actif = float(pozition[0]["positionAmt"])
-        now = datetime.now().strftime("%H:%M:%S")
         if poz_actif == 0:
             break
         else:
-            print("İşlem açık Bekleniyor.")
+            print("İşlem açık, bekleniyor...")
             time.sleep(3)
 
-    # ✅ EK 3: işlem açıldıktan sonra sinyali temizle
     short_signal_ts.pop(symbol, None)
-
 
 print("🔍 Binance USDT-M semboller alınıyor...")
 info = requests.get(f"{BASE}/fapi/v1/exchangeInfo").json()
@@ -88,6 +86,7 @@ symbols = symbols[:30]
 print(f"Toplam {len(symbols)} sembol analiz edilecek.\n")
 
 results = []
+
 while True:
     for symbol in symbols:
         try:
@@ -97,15 +96,15 @@ while True:
             url_4h = f"{BASE}/fapi/v1/klines?symbol={symbol}&interval=4h&limit={limit}"
             data_4h = requests.get(url_4h).json()
             df_4h = pd.DataFrame(data_4h, columns=[
-                "open_time","open","high","low","close","volume",
-                "close_time","qv","ntrades","tbbase","tbquote","ignore"
+                "open_time", "open", "high", "low", "close", "volume",
+                "close_time", "qv", "ntrades", "tbbase", "tbquote", "ignore"
             ])
             df_4h = df_4h.astype({"open": float, "high": float, "low": float, "close": float, "volume": float})
 
             close_4h = df_4h["close"]
-            ema50 = talib.EMA(close_4h, 50)
-            ema200 = talib.EMA(close_4h, 200)
-            rsi_4h = talib.RSI(close_4h, 14)
+            ema50 = ta.ema(close_4h, length=50)
+            ema200 = ta.ema(close_4h, length=200)
+            rsi_4h = ta.rsi(close_4h, length=14)
             vol_4h = df_4h["volume"]
 
             trend = "UP" if ema50.iloc[-1] > ema200.iloc[-1] else "DOWN"
@@ -114,11 +113,11 @@ while True:
             url_1h = f"{BASE}/fapi/v1/klines?symbol={symbol}&interval=1h&limit=50"
             data_1h = requests.get(url_1h).json()
             df_1h = pd.DataFrame(data_1h, columns=[
-                "open_time","open","high","low","close","volume",
-                "close_time","qv","ntrades","tbbase","tbquote","ignore"
+                "open_time", "open", "high", "low", "close", "volume",
+                "close_time", "qv", "ntrades", "tbbase", "tbquote", "ignore"
             ])
             df_1h["close"] = df_1h["close"].astype(float)
-            rsi_1h = talib.RSI(df_1h["close"], 14)
+            rsi_1h = ta.rsi(df_1h["close"], length=14)
 
             rsi_1h_prev = rsi_1h.iloc[-3]
             rsi_1h_last = rsi_1h.iloc[-1]
@@ -133,25 +132,18 @@ while True:
             last_low = df_4h["low"].iloc[-5:].min()
             vol_last = vol_4h.iloc[-1]
             vol_prev = vol_4h.iloc[-2]
-
-            if vol_last > vol_prev * 1.2:
-                  volume_ok = True
-            else:
-                volume_ok = False
+            volume_ok = vol_last > vol_prev * 1.2
 
             if trend == "UP":
                 reason.append("Trend yukarı")
                 if rsi_4h_value < 30 and confirm_long:
                     score = 3
                     reason.append("RSI<30 GÜÇLÜ LONG")
-
             elif trend == "DOWN":
                 reason.append("Trend aşağı")
                 if rsi_4h_value > 70 and confirm_short and volume_ok:
                     score = 3
                     short_signal_ts[symbol] = time.time()
-
-                # sinyal önceden varsa 24 saat boyunca aktif kalsın
                 elif symbol in short_signal_ts:
                     elapsed = time.time() - short_signal_ts[symbol]
                     if elapsed <= SIGNAL_TTL:
@@ -171,7 +163,7 @@ while True:
 
             buffer = 0.0025
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            print(f"✅ [{now}] {symbol} analiz edildi. Trend: {trend}, Puan: {score}, RSI={round(rsi_4h_value,2)},Confirm Short :{confirm_short},Volume Oke:{volume_ok}")
+            print(f"✅ [{now}] {symbol} analiz edildi. Trend: {trend}, Puan: {score}, RSI={round(rsi_4h_value,2)}, Confirm Short: {confirm_short}, Volume OK: {volume_ok}")
 
             time.sleep(0.05)
 
@@ -181,20 +173,17 @@ while True:
                         price_data = requests.get(f"{BASE}/fapi/v1/ticker/price?symbol={symbol}").json()
                         current_price = float(price_data["price"])
                         recenty_price = last_high * (1 - buffer)
-
                         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        distance = abs(current_price - recenty_price) / recenty_price
 
-                        distance=abs(current_price-recenty_price)/recenty_price
-                        
                         if current_price >= recenty_price:
-                            short_position(symbol=symbol,entry_price=current_price)
-                        elif (distance<=0.005):
-                             print(f"⏳ [{now}] {symbol} Bekleniyor... Güncel: {current_price}, Hedef: {recenty_price}")
-                             time.sleep(1)
+                            short_position(symbol=symbol, entry_price=current_price)
+                        elif distance <= 0.005:
+                            print(f"⏳ [{now}] {symbol} Bekleniyor... Güncel: {current_price}, Hedef: {recenty_price}")
+                            time.sleep(1)
                         else:
-                             print("HEDEFTEN UZAK!!")    
-                             break
-
+                            print("HEDEFTEN UZAK!!")
+                            break
                     except Exception as e:
                         print(f"❌ Hata: {symbol} ({e})")
 
