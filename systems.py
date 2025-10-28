@@ -4,10 +4,10 @@ import talib
 import time
 from datetime import datetime
 from urllib.parse import urlencode
-
+import os
 BASE = "https://fapi.binance.com"
-api_key = "GdTkvvxisxiE1UTsGj01UaDNUsyIebZ7Eaxs6SpYSAJp3Z5cgcHIvABqvO5jPIB2"
-secret_key = "fbAUIFRGrzvz82UgCFjBXC7adFNI3Gznwy7Rpn5TIwkoLUvzfdHzQCWxiu4HzNsM"   
+api_key = os.getenv("API_KEY")
+secret_key = os.getenv("SECRET_KEY")
 limit = 250
 
 # ✅ EK 1: 24 saatlik short sinyal takibi
@@ -200,3 +200,4 @@ while True:
 
         except Exception as e:
             print(f"❌ Hata: {symbol} ({e})")
+
